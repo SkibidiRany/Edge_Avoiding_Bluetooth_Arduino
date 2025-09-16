@@ -1,0 +1,253 @@
+#include <LiquidCrystal_I2C.h> // LCD
+
+// ==== Motor Pins ====
+#define LeftMotor1 2
+#define LeftMotor2 3
+#define RightMotor1 4
+#define RightMotor2 5
+
+// ==== LED Pins ====
+#define FrontLEDs 6
+#define RightLEDs 7
+#define BackLEDs 8
+#define LeftLEDs 9
+
+// ==== IR Sensor Pins ====
+#define LeftIR A0
+#define RightIR 10
+
+// ==== Ultrasonic Pins ====
+#define trigPin 11
+#define echoPin 12
+
+// ==== LCD ====
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+
+// ==== Global Variables ====
+String _lastInput = "x";
+String _currentInput = "";
+String lastMessage = "";
+
+int lcdCursorCol = 0;
+int lcdCursorRow = 0;
+
+bool FallingRight = false;
+bool FallingLeft = false;
+
+
+// ==== Constants ====
+const String FrontCommand = "forward";
+const String BackCommand = "back";
+const String RightCommand = "right";
+const String LeftCommand = "left";
+const String StopCommand = "stop";
+
+
+
+// ==== Setup ====
+void setup() {
+  Serial.begin(9600);
+  
+  // Motor Pins
+  pinMode(LeftMotor1, OUTPUT);
+  pinMode(LeftMotor2, OUTPUT);
+  pinMode(RightMotor1, OUTPUT);
+  pinMode(RightMotor2, OUTPUT);
+
+  // LEDs
+  for (int i = 6; i <= 9; i++) pinMode(i, OUTPUT);
+
+  // IR Sensors
+  pinMode(LeftIR, INPUT);
+  pinMode(RightIR, INPUT);
+
+  // Ultrasonic
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  // LCD
+  lcd.begin(16, 2);
+  lcd.backlight();
+  PrintToLCD("Initializing...", true);
+  delay(1500);
+  PrintToLCD("Ready",true);
+}
+
+// ==== Main Loop ====
+void loop() 
+{
+  const String in = GetInput();
+  CheckForFall();
+
+  if(!FallingRight && !FallingLeft)
+    Move(in);
+  else   
+    DealWithFall();
+  
+}
+
+// ==== Input Handling ====
+const String GetInput() {
+  if (Serial.available()) {
+    String received = Serial.readString();
+    Serial.print("Received: ");
+    Serial.println(received);
+  
+    _lastInput = _currentInput;
+    _currentInput = received;
+    
+  }
+  return _currentInput;
+}
+
+
+// ==== Fall Detection ====
+void CheckForFall() {
+  int left = digitalRead(LeftIR);
+  int right = digitalRead(RightIR);
+  FallingLeft = left == HIGH;
+  FallingRight = right == HIGH;
+}
+
+// ==== Handle Fall ====
+void DealWithFall() {
+  _currentInput="";
+  SkibidiStopMotors(true);
+  float distance = GetDistanceCM();
+  String distanceStr = String(distance, 2);  // 2 = number of decimal places
+  delay(80);
+  if(FallingRight && FallingLeft){
+   PrintToLCD("  Falling Both! ", true);
+  } else if(FallingRight){
+    PrintToLCD(" Falling Right! ", true);
+  } else if(FallingLeft){
+    PrintToLCD("  Falling Left! ", true);
+  }
+  PrintToLCD("Distance:", false);
+  PrintToLCD(distanceStr, false);
+  PrintToLCD("cm", false);
+
+  //Back away from fall
+  SkibidiBackward(false);
+  delay(700);
+  //SkibidiStopMotors();
+  //delay(150);
+
+  if(FallingRight && FallingLeft){
+    SkibidiBackward(false);
+  } else if(FallingRight){
+    SkibidiRight(false);
+  } else if(FallingLeft){
+    SkibidiLeft(false);
+  }
+
+  delay(200);
+  SkibidiStopMotors(false);
+  delay(1500);
+  FallingLeft = FallingRight = false;
+  _currentInput="";
+}
+
+float GetDistanceCM() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  long duration = pulseIn(echoPin, HIGH);
+  float distance = duration * 0.034 / 2; // Speed of sound = 0.034 cm/µs, divide by 2 for round trip
+
+  return distance; // in cm
+}
+
+// ==== Movement ====
+void Move(const String direction) {
+  if (direction == FrontCommand) {
+    SkibidiForward(true);
+  } else if (direction == BackCommand) {
+    SkibidiBackward(true);
+  } else if (direction == LeftCommand) {
+    SkibidiLeft(true);
+  } else if (direction == RightCommand) {
+    SkibidiRight(true);
+  } else
+    SkibidiStopMotors(true);
+  
+  
+}
+
+// ==== Motor + LED Functions ====
+void moveMotors(int l1, int l2, int r1, int r2) {
+  digitalWrite(LeftMotor1, l1);
+  digitalWrite(LeftMotor2, l2);
+  digitalWrite(RightMotor1, r1);
+  digitalWrite(RightMotor2, r2);
+}
+
+void HandleLEDs(int front, int back, int right, int left) {
+  digitalWrite(FrontLEDs, front);
+  digitalWrite(BackLEDs, back);
+  digitalWrite(RightLEDs, right);
+  digitalWrite(LeftLEDs, left);
+}
+
+void PrintToLCD(String msg, bool override) {
+  static String lastMsg = "";
+  if (override) {
+    if (lastMsg != msg) {
+      lcd.clear();
+      lcdCursorCol = 0;
+      lcdCursorRow = 0;
+      lastMsg = msg;
+    } else {
+      return; // Skip printing identical messages
+    }
+  }
+
+  lcd.setCursor(lcdCursorCol, lcdCursorRow);
+
+  for (int i = 0; i < msg.length(); i++) {
+    lcd.print(msg[i]);
+    lcdCursorCol++;
+
+    if (lcdCursorCol >= 16) {
+      lcdCursorCol = 0;
+      lcdCursorRow++;
+      if (lcdCursorRow >= 2) lcdCursorRow = 0;
+      lcd.setCursor(lcdCursorCol, lcdCursorRow);
+    }
+  }
+}
+
+
+void SkibidiForward(bool toPrint) {
+  if(toPrint) PrintToLCD("Moving Forward", true);
+  moveMotors(HIGH, LOW, HIGH, LOW);
+  HandleLEDs(HIGH, LOW, LOW, LOW);
+}
+
+void SkibidiBackward(bool toPrint) {
+  if(toPrint) PrintToLCD("Moving Backward", true);
+  moveMotors(LOW, HIGH, LOW, HIGH);
+  HandleLEDs(LOW, HIGH, LOW, LOW);
+}
+
+void SkibidiRight(bool toPrint) {
+  if(toPrint) PrintToLCD("Turning Right", true);
+  moveMotors(HIGH, LOW, LOW, LOW);
+  HandleLEDs(LOW, LOW, HIGH, LOW);
+}
+
+void SkibidiLeft(bool toPrint) {
+  if(toPrint) PrintToLCD("Turning Left", true);
+  moveMotors(LOW, LOW, HIGH, LOW);
+  HandleLEDs(LOW, LOW, LOW, HIGH);
+}
+
+void SkibidiStopMotors(bool toPrint) {
+  if(toPrint) PrintToLCD("Stop Motors", true);
+  moveMotors(LOW, LOW, LOW, LOW);
+  HandleLEDs(LOW, LOW, LOW, LOW);
+}
